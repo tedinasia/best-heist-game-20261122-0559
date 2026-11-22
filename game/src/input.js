@@ -1,53 +1,72 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard + mouse untuk Arsip Abyssal. Tidak ada dependensi luar.
+// Tekan sekali (Spasi/E/P/R/M) diantrekan: keydown yang cepat (down+up di
+// antara dua frame) tidak boleh hilang — jadi consumeKey membaca antrean
+// `pressed`, bukan state tombol yang sedang ditahan.
+export function createInput(canvas) {
+  const keys = new Set();
+  const pressed = new Set();
+  const clicks = [];
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+  function onKeyDown(event) {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) {
+      event.preventDefault();
+    }
+    if (!event.repeat) pressed.add(event.code);
+    keys.add(event.code);
+  }
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+  function onKeyUp(event) {
+    keys.delete(event.code);
+  }
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
+  function onClick(event) {
+    const rect = canvas.getBoundingClientRect();
+    clicks.push({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+  }
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  canvas.addEventListener('click', onClick);
+
+  function isDown(...codes) {
+    return codes.some((code) => keys.has(code));
+  }
+
+  function moveVector() {
+    let x = 0;
+    let y = 0;
+    if (isDown('KeyA', 'ArrowLeft')) x -= 1;
+    if (isDown('KeyD', 'ArrowRight')) x += 1;
+    if (isDown('KeyW', 'ArrowUp')) y -= 1;
+    if (isDown('KeyS', 'ArrowDown')) y += 1;
+    if (x !== 0 && y !== 0) {
+      const len = Math.hypot(x, y);
+      x /= len;
+      y /= len;
+    }
+    return { x, y };
+  }
+
+  function consumeClicks() {
+    return clicks.splice(0, clicks.length);
+  }
+
+  // Sekali tekan sejak pemanggilan terakhir (tahan tombol = satu kali).
+  function consumeKey(code) {
+    if (pressed.has(code)) {
+      pressed.delete(code);
+      return true;
+    }
+    return false;
+  }
 
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
+    isDown,
+    moveVector,
+    consumeClicks,
+    consumeKey,
+    get sneaking() {
+      return isDown('ShiftLeft', 'ShiftRight');
     },
   };
 }

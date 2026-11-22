@@ -1,79 +1,135 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Adegan deterministik di balik ?shot=start|play|getaway|win.
+// Setiap adegan menata state game yang sama persis setiap kali, lalu dirender
+// sekali — jadi screenshot cover selalu menampilkan frame yang lengkap:
+// ruangan, thief, guard + vision cone, kamera, loot, dan alarm meter.
+import { GUARD } from './config.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+const SHOT_NOW = 8.4;
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+function placeGuard(guard, x, y, facing, suspicion, state) {
+  guard.x = x;
+  guard.y = y;
+  guard.facing = facing;
+  guard.suspicion = suspicion;
+  guard.state = state;
+  guard.alertTimer = state === 'alert' ? GUARD.alertSeconds : 0;
+  guard.lastSeenX = x;
+  guard.lastSeenY = y;
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
-  }
-  return best;
-}
+export function stageShot(name, game) {
+  game.now = SHOT_NOW;
+  game.banner = null;
+  game.bubbles = [];
+  game.inkClouds = [];
+  game.elapsed = 0;
+  game.score = 0;
+  game.lootTaken = 0;
+  game.inkCharges = 3;
+  game.alarm = 0;
+  game.pearlTaken = false;
+  game.cause = null;
+  for (const pearl of game.world.loot) pearl.taken = false;
+  game.world.pearl.taken = false;
 
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+  if (name === 'play') {
+    // Cover: penyusupan tengah jalan. Satu guard sudah curiga (cone kuning),
+    // kamera menyapu, alarm 34, tinta tinggal 2, dua mutiara kecil sudah diambil.
+    game.screen = 'playing';
+    game.player.x = 560;
+    game.player.y = 540;
+    game.player.facing = -Math.PI / 2;
+    game.player.sneaking = true;
+    game.player.moving = false;
+    game.elapsed = 47;
+    game.score = 200;
+    game.lootTaken = 2;
+    game.world.loot[0].taken = true;
+    game.world.loot[1].taken = true;
+    game.inkCharges = 2;
+    game.alarm = 34;
+    placeGuard(game.guards[0], 700, 220, Math.PI, 0.55, 'suspicious');
+    placeGuard(game.guards[1], 1100, 300, Math.PI / 2, 0.1, 'patrol');
+    placeGuard(game.guards[2], 300, 320, Math.PI / 2, 0, 'patrol');
+    game.cameras[0].sweepTime = 1.1;
+    game.cameras[1].sweepTime = 0.4;
+    game.cameras[2].sweepTime = 2.0;
+    game.cameras[0].angle = game.cameras[0].baseAngle + Math.sin(1.1 * 0.55) * game.cameras[0].sweep;
+    game.cameras[1].angle = game.cameras[1].baseAngle + Math.sin(0.4 * 0.55) * game.cameras[1].sweep;
+    game.cameras[2].angle = game.cameras[2].baseAngle + Math.sin(2.0 * 0.55) * game.cameras[2].sweep;
+    game.inkClouds.push({ x: 700, y: 420, radius: 108, ttl: 3 });
+    game.hidden = false;
+    return;
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+
+  if (name === 'getaway') {
+    // Twist: Mutiara sudah diambil dan HIDUP — pemain bersinar amber,
+    // alarm 68, semua guard waspada, tinta aktif menutupi pelarian.
+    game.screen = 'playing';
+    game.pearlTaken = true;
+    game.world.pearl.taken = true;
+    game.player.x = 980;
+    game.player.y = 520;
+    game.player.facing = Math.PI;
+    game.player.sneaking = false;
+    game.player.moving = true;
+    game.elapsed = 96;
+    game.score = 700;
+    game.lootTaken = 4;
+    game.world.loot[0].taken = true;
+    game.world.loot[1].taken = true;
+    game.world.loot[2].taken = true;
+    game.world.loot[3].taken = true;
+    game.inkCharges = 1;
+    game.alarm = 68;
+    placeGuard(game.guards[0], 850, 480, Math.PI, 1, 'alert');
+    game.guards[0].lastSeenX = 980;
+    game.guards[0].lastSeenY = 520;
+    placeGuard(game.guards[1], 1080, 420, Math.PI / 2, 0.9, 'alert');
+    game.guards[1].lastSeenX = 980;
+    game.guards[1].lastSeenY = 520;
+    placeGuard(game.guards[2], 330, 420, 0, 0.3, 'suspicious');
+    game.cameras[0].sweepTime = 2.4;
+    game.cameras[1].sweepTime = 1.0;
+    game.cameras[2].sweepTime = 0.7;
+    game.cameras[0].angle = game.cameras[0].baseAngle + Math.sin(2.4 * 0.55) * game.cameras[0].sweep;
+    game.cameras[1].angle = game.cameras[1].baseAngle + Math.sin(1.0 * 0.55) * game.cameras[1].sweep;
+    game.cameras[2].angle = game.cameras[2].baseAngle + Math.sin(0.7 * 0.55) * game.cameras[2].sweep;
+    game.inkClouds.push({ x: 960, y: 500, radius: 108, ttl: 3.5 });
+    game.banner = { text: 'MUTIARA HIDUP!', sub: 'Ia bersinar — semua penjaga melihatmu lebih cepat. LARI KE AIRLOCK!', ttl: 99 };
+    game.hidden = false;
+    return;
   }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+
+  if (name === 'win') {
+    // Layar menang: penyelam sudah di airlock dengan Mutiara.
+    game.screen = 'won';
+    game.pearlTaken = true;
+    game.world.pearl.taken = true;
+    game.player.x = game.world.hatch.x;
+    game.player.y = game.world.hatch.y;
+    game.player.facing = Math.PI;
+    game.elapsed = 118;
+    game.score = 1240;
+    game.lootTaken = 5;
+    for (const pearl of game.world.loot) pearl.taken = true;
+    game.alarm = 22;
+    game.inkCharges = 1;
+    game.endStats = { score: 1240, time: 118, loot: 5 };
+    placeGuard(game.guards[0], 450, 220, 0, 0, 'patrol');
+    placeGuard(game.guards[1], 980, 170, Math.PI / 2, 0, 'patrol');
+    placeGuard(game.guards[2], 150, 150, Math.PI / 2, 0, 'patrol');
+    game.hidden = false;
+    return;
+  }
+
+  // Default: layar judul di atas ruangan yang hidup.
+  game.screen = 'title';
+  placeGuard(game.guards[0], 450, 220, 0, 0, 'patrol');
+  placeGuard(game.guards[1], 980, 120, Math.PI / 2, 0, 'patrol');
+  placeGuard(game.guards[2], 150, 150, Math.PI / 2, 0, 'patrol');
+  game.player.x = game.world.spawn.x;
+  game.player.y = game.world.spawn.y;
+  game.player.facing = 0;
+  game.hidden = false;
 }
